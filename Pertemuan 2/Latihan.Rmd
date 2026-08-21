@@ -1,1 +1,8 @@
+# Latihan
 
+Penjumlahan
+
+```{r}
+x = 3 +6
+x
+```
