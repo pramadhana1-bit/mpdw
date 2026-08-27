@@ -1,0 +1,285 @@
+---
+title: "Tugas Pertemuan 2 - Pemulusan Data Harga Cabai Merah"
+author: "Putra Ramadhana"
+output:
+  html_document: default
+  pdf_document: default
+  word_document: default
+---
+
+## Deskripsi Data
+
+Data yang digunakan adalah data harga harian **Cabai Merah** sebanyak 100 periode (16 Desember 2022 -- 4 Mei 2023). Data ini merupakan data deret waktu tanpa pola musiman yang jelas (periode pengamatan kurang dari satu tahun), sehingga metode pemulusan yang diterapkan pada tugas ini adalah **Single Moving Average (SMA)**, **Double Moving Average (DMA)**, **Single Exponential Smoothing (SES)**, dan **Double Exponential Smoothing (DES)**. Metode Holt-Winters (musiman) tidak digunakan karena data tidak menunjukkan pola musiman/berulang yang cukup panjang untuk diidentifikasi.
+
+## Library/Packages
+
+```{r}
+library(forecast)
+library(TTR)
+library(ggplot2)
+```
+
+## Impor Data
+
+```{r}
+dataCabai <- read.csv2("C:\\Users\\Roshan\\OneDrive\\Documents\\Kuliah\\MPDW\\MPDW Cabai merah (100 Periode).csv")
+dataCabai$Harga <- as.numeric(dataCabai$Harga)
+dataCabai$Periode <- 1:nrow(dataCabai)
+
+head(dataCabai)
+str(dataCabai)
+dim(dataCabai)
+```
+
+Mengubah data harga menjadi objek deret waktu dengan fungsi `ts()`.
+
+```{r}
+cabai.ts <- ts(dataCabai$Harga)
+summary(cabai.ts)
+```
+
+## Eksplorasi Data
+
+```{r}
+ts.plot(cabai.ts, xlab = "Periode", ylab = "Harga (Ribu Rp/Kg)",
+        main = "Time Series Plot Harga Cabai Merah")
+points(cabai.ts)
+```
+
+Plot deret waktu menunjukkan data yang berfluktuasi naik-turun mengikuti siklus harga pasar, tanpa arah tren jangka panjang yang konsisten (harga naik pada suatu periode kemudian turun kembali pada periode berikutnya).
+
+## Pembagian Data Latih dan Data Uji
+
+Pembagian data dilakukan dengan perbandingan 80% data latih dan 20% data uji.
+
+```{r}
+n <- nrow(dataCabai)
+n_train <- floor(0.8 * n)
+
+training <- dataCabai[1:n_train, ]
+testing  <- dataCabai[(n_train+1):n, ]
+
+train.ts <- ts(training$Harga)
+test.ts  <- ts(testing$Harga, start = n_train + 1)
+
+n_train
+n - n_train
+```
+
+```{r}
+ggplot() +
+  geom_line(data = training, aes(x = Periode, y = Harga, col = "Data Latih")) +
+  geom_line(data = testing, aes(x = Periode, y = Harga, col = "Data Uji")) +
+  labs(x = "Periode", y = "Harga", color = "Legend") +
+  scale_colour_manual(name = "Keterangan:", breaks = c("Data Latih", "Data Uji"),
+                       values = c("blue", "red")) +
+  theme_bw() + theme(legend.position = "bottom")
+```
+
+# Single Moving Average (SMA)
+
+Metode SMA cocok digunakan untuk data dengan pola stasioner/konstan. Pemulusan dilakukan dengan `m = 4`.
+
+```{r}
+m <- 4
+data.sma <- SMA(train.ts, n = m)
+ramalan.sma <- c(NA, data.sma)
+
+#Plot hasil pemulusan pada data latih
+ts.plot(train.ts, xlab = "Periode", ylab = "Harga", main = paste("SMA m =", m))
+points(train.ts)
+lines(data.sma, col = "green", lwd = 2)
+legend("topleft", c("data aktual", "data pemulusan"), lty = 1, col = c("black","green"), cex = 0.8)
+```
+
+Nilai pemulusan pada periode terakhir data latih digunakan sebagai peramalan untuk seluruh periode data uji
+
+```{r}
+#Akurasi data latih
+error_train.sma <- train.ts - ramalan.sma[1:length(train.ts)]
+SSE_train.sma <- sum(error_train.sma[(m+1):length(train.ts)]^2)
+MSE_train.sma <- mean(error_train.sma[(m+1):length(train.ts)]^2)
+MAPE_train.sma <- mean(abs(error_train.sma[(m+1):length(train.ts)]/train.ts[(m+1):length(train.ts)])*100)
+
+akurasi_train.sma <- matrix(c(SSE_train.sma, MSE_train.sma, MAPE_train.sma))
+row.names(akurasi_train.sma) <- c("SSE", "MSE", "MAPE")
+colnames(akurasi_train.sma) <- paste("SMA m =", m)
+akurasi_train.sma
+```
+
+```{r}
+#Akurasi data uji (flat forecast dari nilai pemulusan terakhir)
+ramalan_test.sma <- rep(tail(na.omit(data.sma), 1), length(test.ts))
+error_test.sma <- test.ts - ramalan_test.sma
+
+SSE_test.sma <- sum(error_test.sma^2)
+MSE_test.sma <- mean(error_test.sma^2)
+MAPE_test.sma <- mean(abs(error_test.sma/test.ts)*100)
+
+akurasi_test.sma <- matrix(c(SSE_test.sma, MSE_test.sma, MAPE_test.sma))
+row.names(akurasi_test.sma) <- c("SSE", "MSE", "MAPE")
+colnames(akurasi_test.sma) <- paste("SMA m =", m)
+akurasi_test.sma
+```
+
+# Double Moving Average (DMA)
+
+Metode DMA lebih sesuai untuk data berpola tren, karena melakukan pemulusan rata-rata sebanyak dua tahap sehingga mampu menangkap komponen level ($A_t$) dan tren ($B_t$).
+
+```{r}
+dma <- SMA(data.sma, n = m)
+At <- 2*data.sma - dma
+Bt <- (2/(m-1))*(data.sma - dma)
+data.dma <- At + Bt
+ramalan.dma <- c(NA, data.dma)
+
+ts.plot(train.ts, xlab = "Periode", ylab = "Harga", main = paste("DMA m =", m))
+points(train.ts)
+lines(data.dma, col = "green", lwd = 2)
+legend("topleft", c("data aktual", "data pemulusan"), lty = 1, col = c("black","green"), cex = 0.8)
+```
+
+```{r}
+#Akurasi data latih
+skip <- 2*m - 1
+error_train.dma <- train.ts - ramalan.dma[1:length(train.ts)]
+SSE_train.dma <- sum(error_train.dma[(skip+1):length(train.ts)]^2)
+MSE_train.dma <- mean(error_train.dma[(skip+1):length(train.ts)]^2)
+MAPE_train.dma <- mean(abs(error_train.dma[(skip+1):length(train.ts)]/train.ts[(skip+1):length(train.ts)])*100)
+
+akurasi_train.dma <- matrix(c(SSE_train.dma, MSE_train.dma, MAPE_train.dma))
+row.names(akurasi_train.dma) <- c("SSE", "MSE", "MAPE")
+colnames(akurasi_train.dma) <- paste("DMA m =", m)
+akurasi_train.dma
+```
+
+```{r}
+#Peramalan data uji: ekstrapolasi linear At + Bt*h
+h <- 1:length(test.ts)
+At_akhir <- as.numeric(tail(na.omit(At), 1))
+Bt_akhir <- as.numeric(tail(na.omit(Bt), 1))
+ramalan_test.dma <- At_akhir + Bt_akhir*h
+
+error_test.dma <- test.ts - ramalan_test.dma
+SSE_test.dma <- sum(error_test.dma^2)
+MSE_test.dma <- mean(error_test.dma^2)
+MAPE_test.dma <- mean(abs(error_test.dma/test.ts)*100)
+
+akurasi_test.dma <- matrix(c(SSE_test.dma, MSE_test.dma, MAPE_test.dma))
+row.names(akurasi_test.dma) <- c("SSE", "MSE", "MAPE")
+colnames(akurasi_test.dma) <- paste("DMA m =", m)
+akurasi_test.dma
+```
+
+Pada data uji, DMA menghasilkan MAPE yang jauh lebih besar dibandingkan SMA. Hal ini terjadi karena DMA mengekstrapolasi tren naik yang terlihat di akhir data latih, padahal pada data uji harga cabai justru berbalik turun tajam, sehingga hasil ramalan DMA jauh menyimpang dari data aktual.
+
+# Single Exponential Smoothing (SES)
+
+SES memberi bobot yang menurun secara eksponensial pada data historis dan cocok untuk data tanpa tren maupun musiman yang jelas. Nilai parameter $\lambda$ (alpha) dioptimalkan agar SSE minimum.
+
+```{r}
+ses.opt <- ses(train.ts, h = length(test.ts), alpha = NULL)
+ses.opt$model
+plot(ses.opt)
+```
+
+```{r}
+#Akurasi data latih
+fit.ses <- fitted(ses.opt)
+error_train.ses <- train.ts[-1] - fit.ses[-1]
+SSE_train.ses <- sum(error_train.ses^2)
+MSE_train.ses <- mean(error_train.ses^2)
+MAPE_train.ses <- mean(abs(error_train.ses/train.ts[-1])*100)
+
+akurasi_train.ses <- matrix(c(SSE_train.ses, MSE_train.ses, MAPE_train.ses))
+row.names(akurasi_train.ses) <- c("SSE", "MSE", "MAPE")
+colnames(akurasi_train.ses) <- "SES optimum"
+akurasi_train.ses
+```
+
+```{r}
+#Akurasi data uji
+ramalan_test.ses <- ses.opt$mean
+error_test.ses <- test.ts - ramalan_test.ses
+SSE_test.ses <- sum(error_test.ses^2)
+MSE_test.ses <- mean(error_test.ses^2)
+MAPE_test.ses <- mean(abs(error_test.ses/test.ts)*100)
+
+akurasi_test.ses <- matrix(c(SSE_test.ses, MSE_test.ses, MAPE_test.ses))
+row.names(akurasi_test.ses) <- c("SSE", "MSE", "MAPE")
+colnames(akurasi_test.ses) <- "SES optimum"
+akurasi_test.ses
+```
+
+Nilai $\alpha$ optimum yang dihasilkan mendekati 1, artinya bobot hampir seluruhnya diberikan pada data periode terakhir (mirip metode *naive*). Hal ini wajar terjadi pada data harga yang berfluktuasi mendekati pola *random walk*.
+
+# Double Exponential Smoothing (DES)
+
+DES (metode Holt) menambahkan komponen tren pada pemulusan eksponensial, menggunakan dua parameter yaitu $\alpha$ (level) dan $\beta$ (tren), yang juga dioptimalkan.
+
+```{r}
+des.opt <- HoltWinters(train.ts, gamma = FALSE)
+des.opt
+plot(des.opt)
+```
+
+```{r}
+ramalandes.opt <- forecast(des.opt, h = length(test.ts))
+ramalandes.opt
+```
+
+```{r}
+#Akurasi data latih
+ssedes.train <- des.opt$SSE
+msedes.train <- ssedes.train/length(train.ts)
+sisaandes <- ramalandes.opt$residuals
+mapedes.train <- mean(abs(sisaandes[3:length(train.ts)]/train.ts[3:length(train.ts)])*100, na.rm = TRUE)
+
+akurasides.opt <- matrix(c(ssedes.train, msedes.train, mapedes.train))
+row.names(akurasides.opt) <- c("SSE", "MSE", "MAPE")
+colnames(akurasides.opt) <- "DES optimum"
+akurasides.opt
+```
+
+```{r}
+#Akurasi data uji
+selisihdes.opt <- ramalandes.opt$mean - test.ts
+SSEtestingdes.opt <- sum(selisihdes.opt^2)
+MSEtestingdes.opt <- SSEtestingdes.opt/length(test.ts)
+MAPEtestingdes.opt <- mean(abs(selisihdes.opt/test.ts)*100)
+
+akurasiDesTesting <- matrix(c(SSEtestingdes.opt, MSEtestingdes.opt, MAPEtestingdes.opt))
+row.names(akurasiDesTesting) <- c("SSE", "MSE", "MAPE")
+colnames(akurasiDesTesting) <- "DES optimum"
+akurasiDesTesting
+```
+
+Sama seperti DMA, DES juga mengasumsikan adanya tren pada data. Karena tren pada data harga cabai tidak konsisten (naik lalu turun tajam), hasil ramalan DES pada data uji memiliki *error* yang jauh lebih besar dibandingkan SMA maupun SES.
+
+# Perbandingan Kinerja Metode
+
+## Perbandingan pada Data Latih
+
+```{r}
+akurasi.train.full <- cbind(akurasi_train.sma, akurasi_train.dma,
+                             akurasi_train.ses, akurasides.opt)
+colnames(akurasi.train.full) <- c("SMA", "DMA", "SES", "DES")
+akurasi.train.full
+```
+
+## Perbandingan pada Data Uji
+
+```{r}
+akurasi.test.full <- cbind(akurasi_test.sma, akurasi_test.dma,
+                            akurasi_test.ses, akurasiDesTesting)
+colnames(akurasi.test.full) <- c("SMA", "DMA", "SES", "DES")
+akurasi.test.full
+```
+
+# Kesimpulan
+
+Pada **data latih**, metode DES memiliki SSE/MSE/MAPE terkecil, diikuti oleh SES, DMA, kemudian SMA. Hal ini wajar karena metode yang lebih fleksibel (memiliki komponen tren dan/atau bobot yang dioptimalkan) cenderung memiliki kecocokan (*fit*) terbaik terhadap data yang sama-sama digunakan untuk melatih parameternya.
+
+Namun demikian, **kinerja pada data uji** justru menunjukkan hal sebaliknya: metode **SMA** dan **SES** memiliki MAPE yang jauh lebih kecil (sekitar 6.5%) dibandingkan metode **DMA** dan **DES** (masing-masing sekitar 21-27%). Hal ini terjadi karena data harga cabai merah tidak memiliki arah tren jangka panjang yang konsisten, melainkan berfluktuasi naik-turun mengikuti dinamika pasar. Metode DMA dan DES yang mengasumsikan adanya komponen tren melakukan ekstrapolasi tren dari akhir data latih, sehingga ketika arah pergerakan harga pada data uji berbalik arah, ramalan kedua metode tersebut menyimpang jauh dari nilai aktual (*overfitting terhadap tren lokal*). Sebaliknya, SMA dan SES tidak mengekstrapolasi tren sehingga lebih tahan terhadap perubahan arah pergerakan harga secara tiba-tiba.
+
+Berdasarkan kinerja pada data uji -- yang merepresentasikan kemampuan generalisasi/peramalan metode terhadap data baru -- maka metode **Single Moving Average (SMA)** dan **Single Exponential Smoothing (SES)** dipilih sebagai metode pemulusan terbaik untuk data harga cabai merah ini, dengan **SMA** sedikit unggul pada seluruh ukuran akurasi (SSE, MSE, dan MAPE) dibandingkan SES. Metode DMA dan DES kurang tepat digunakan pada data ini karena data tidak menunjukkan pola tren yang stabil.
