@@ -1,0 +1,204 @@
+---
+title: "Latihan 1 - Regresi dengan Peubah Lag (Pangsa Pasar vs Harga Pasta Gigi)"
+author: "Putra Ramadhana"
+output:
+  html_document:
+    theme: yeti
+    toc: true
+    toc_float: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+```
+
+## Packages
+
+```{r}
+library(dLagM)
+library(dynlm)
+library(MLmetrics)
+library(lmtest)
+library(car)
+```
+
+## Impor Data
+
+Data diinput persis sesuai tabel pada soal (20 periode).
+
+```{r}
+Period <- 1:20
+
+Market_Share <- c(3.63, 4.20, 3.33, 4.54, 2.89, 4.87, 4.90, 5.29, 6.18, 7.20,
+                   7.25, 6.09, 6.80, 8.65, 8.43, 8.29, 7.18, 7.90, 8.45, 8.23)
+
+Price <- c(0.97, 0.95, 0.99, 0.91, 0.98, 0.90, 0.89, 0.86, 0.85, 0.82,
+           0.79, 0.83, 0.81, 0.77, 0.76, 0.80, 0.83, 0.79, 0.76, 0.78)
+
+data <- data.frame(Period = Period,
+                    Market_Share = Market_Share,
+                    Price = Price)
+
+str(data)
+data
+```
+
+## Pembagian Data
+
+```{r}
+train <- data[1:15, ]
+test  <- data[16:20, ]
+
+train.ts <- ts(train)
+test.ts  <- ts(test)
+data.ts  <- ts(data)
+```
+
+## Model Koyck
+
+Model Koyck mengasumsikan bahwa pengaruh lag $X$ terhadap $Y$ semakin kecil seiring
+bertambahnya jarak lag, dengan bentuk umum:
+
+$$
+y_t=a(1-\lambda)+\beta_0X_t+\beta_1Z_t+\lambda Y_{t-1}+V_t
+$$
+
+### Pemodelan
+
+```{r}
+model.koyck <- koyckDlm(x = train$Price, y = train$Market_Share)
+summary(model.koyck)
+AIC(model.koyck)
+BIC(model.koyck)
+```
+
+### Peramalan dan Akurasi
+
+```{r}
+fore.koyck <- forecast(model = model.koyck, x = test$Price, h = 5)
+fore.koyck
+mape.koyck <- MAPE(fore.koyck$forecasts, test$Market_Share)
+mape.koyck
+GoF(model.koyck)
+```
+
+## Regression with Distributed Lag (DLM)
+
+### Pemodelan Awal (Lag = 2)
+
+Sebagai pembanding awal, dicoba model DLM dengan lag = 2.
+
+```{r}
+model.dlm <- dlm(x = train$Price, y = train$Market_Share, q = 2)
+summary(model.dlm)
+AIC(model.dlm)
+BIC(model.dlm)
+```
+
+### Penentuan Lag Optimum
+
+```{r}
+finiteDLMauto(formula = Market_Share ~ Price,
+              data = data.frame(train), q.min = 1, q.max = 10,
+              model.type = "dlm", error.type = "AIC", trace = TRUE)
+```
+
+Berdasarkan AIC terkecil, dipilih lag optimum sesuai output di atas untuk membentuk
+model DLM kedua.
+
+```{r}
+model.dlm2 <- dlm(x = train$Price, y = train$Market_Share, q = 6)
+summary(model.dlm2)
+AIC(model.dlm2)
+BIC(model.dlm2)
+```
+
+### Peramalan dan Akurasi
+
+```{r}
+fore.dlm <- forecast(model = model.dlm, x = test$Price, h = 5)
+mape.dlm <- MAPE(fore.dlm$forecasts, test$Market_Share)
+mape.dlm
+GoF(model.dlm)
+
+fore.dlm2 <- forecast(model = model.dlm2, x = test$Price, h = 5)
+mape.dlm2 <- MAPE(fore.dlm2$forecasts, test$Market_Share)
+mape.dlm2
+GoF(model.dlm2)
+```
+
+## Model Autoregressive (ARDL)
+
+Model *autoregressive* menyatakan bahwa $Y_t$ dipengaruhi oleh $X_t$ dan lag dari
+dirinya sendiri $Y_{t-1}$.
+
+### Pemodelan
+
+```{r}
+model.ardl <- ardlDlm(formula = Market_Share ~ Price,
+                       data = train, p = 1, q = 1)
+summary(model.ardl)
+AIC(model.ardl)
+BIC(model.ardl)
+```
+
+### Peramalan dan Akurasi
+
+```{r}
+fore.ardl <- forecast(model = model.ardl, x = test$Price, h = 5)
+fore.ardl
+mape.ardl <- MAPE(fore.ardl$forecasts, test$Market_Share)
+mape.ardl
+GoF(model.ardl)
+```
+
+## Pemodelan dengan `dynlm` (Cek Silang)
+
+```{r}
+cons_lm1 <- dynlm(Market_Share ~ Price + L(Price), data = train.ts)          # DLM q=1
+cons_lm2 <- dynlm(Market_Share ~ Price + L(Market_Share), data = train.ts)   # ARDL p=1,q=0
+cons_lm3 <- dynlm(Market_Share ~ Price + L(Price) + L(Market_Share), data = train.ts) # ARDL p=1,q=1
+cons_lm4 <- dynlm(Market_Share ~ Price + L(Price) + L(Price, 2), data = train.ts)     # DLM q=2
+
+deviance(cons_lm1); deviance(cons_lm2); deviance(cons_lm3); deviance(cons_lm4)
+```
+
+### Uji Autokorelasi Residual
+
+```{r}
+dwtest(cons_lm1)
+dwtest(cons_lm3)
+```
+
+### Uji Normalitas Residual
+
+```{r}
+shapiro.test(residuals(cons_lm1))
+shapiro.test(residuals(cons_lm3))
+```
+
+## Perbandingan Model dan Kesimpulan
+
+```{r}
+akurasi <- matrix(c(mape.koyck, mape.dlm, mape.dlm2, mape.ardl))
+row.names(akurasi) <- c("Koyck", "DLM (q=2)", "DLM (q optimum)", "Autoregressive (p=1,q=1)")
+colnames(akurasi) <- c("MAPE")
+akurasi
+```
+
+```{r}
+par(mfrow = c(1, 1))
+plot(test$Price, test$Market_Share, type = "b", col = "black", ylim = c(1, 20),
+     xlab = "Price", ylab = "Market Share", main = "Perbandingan Hasil Peramalan")
+points(test$Price, fore.koyck$forecasts, col = "red");    lines(test$Price, fore.koyck$forecasts, col = "red")
+points(test$Price, fore.dlm$forecasts,   col = "blue");   lines(test$Price, fore.dlm$forecasts,   col = "blue")
+points(test$Price, fore.dlm2$forecasts,  col = "orange"); lines(test$Price, fore.dlm2$forecasts,  col = "orange")
+points(test$Price, fore.ardl$forecasts,  col = "green");  lines(test$Price, fore.ardl$forecasts,  col = "green")
+legend("topleft",
+       c("Aktual", "Koyck", "DLM (q=2)", "DLM (q optimum)", "Autoregressive"),
+       lty = 1, col = c("black", "red", "blue", "orange", "green"), cex = 0.8)
+```
+
+Berdasarkan nilai **MAPE** pada data uji, model dengan nilai MAPE terkecil dipilih
+sebagai **model terbaik** untuk memodelkan hubungan *distributed lag* antara pangsa
+pasar (Y) dan harga (X) produk pasta gigi tersebut.
