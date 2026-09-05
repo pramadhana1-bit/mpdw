@@ -1,0 +1,164 @@
+---
+title: "Latihan 2"
+author: "Putra Ramadhana"
+output:
+  html_document:
+    theme: yeti
+    toc: true
+    toc_float: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+```
+
+## Packages
+
+```{r}
+library(lmtest)   # uji Durbin-Watson
+library(orcutt)   # metode Cochrane-Orcutt
+```
+
+1. **Plot sisaan** (sisaan vs urutan waktu / periode)
+2. **Uji Durbin-Watson**
+
+Jika ditemukan autokorelasi, dilakukan penanganan dengan dua metode:
+
+- **Metode Cochrane-Orcutt** — mengestimasi $\rho$ (koefisien autokorelasi orde
+  satu) secara iteratif menggunakan `orcutt::cochrane.orcutt()`, lalu
+  mentransformasi data dengan $\rho$ tersebut.
+- **Metode Hildreth-Lu** — mencari nilai $\rho$ optimum melalui pencarian
+  grid (*grid search*) yang meminimumkan Jumlah Kuadrat Sisaan (JKS/SSE) dari
+  model yang telah ditransformasi:
+
+$$
+Y_t-\rho Y_{t-1}=\beta_0(1-\rho)+\beta_1(X_t-\rho X_{t-1})+\varepsilon_t
+$$
+
+```{r}
+# Fungsi Hildreth-Lu
+hildreth.lu <- function(y, x, rho){
+  t <- 2:length(y)
+  y <- y[t] - rho * y[t-1]
+  x <- x[t] - rho * x[t-1]
+  return(lm(y ~ x))
+}
+```
+
+# Data 2: Sales vs Advertising
+
+## Impor Data
+
+```{r}
+Year <- 1975:2014
+Sales <- c(11.7,12.0,12.3,12.8,13.1,13.6,13.9,14.4,14.7,15.3,
+           15.5,15.8,16.1,16.6,16.9,16.7,16.9,17.4,17.6,17.9,
+           18.0,17.9,18.0,18.2,18.2,18.3,18.6,19.2,19.3,19.5,
+           19.2,19.3,19.5,20.0,20.0,19.9,19.8,19.9,20.2,21.0)
+Advertising <- c(9.4,9.6,10.0,10.4,10.8,10.9,11.7,12.2,12.5,12.9,
+                  13.0,13.2,13.8,14.2,14.6,14.4,15.0,15.4,15.7,15.9,
+                  15.9,16.0,16.3,16.2,16.8,17.3,17.6,18.1,18.3,18.5,
+                  18.7,18.9,19.2,20.0,20.0,20.3,20.4,21.0,21.5,22.1)
+d2 <- data.frame(Year, Sales, Advertising)
+d2
+```
+
+## Regresi OLS (Cross Section)
+
+```{r}
+model2 <- lm(Sales ~ Advertising, data = d2)
+summary(model2)
+```
+
+Model awal:
+
+$$
+\hat{Sales} = 5.965 + 0.710\,Advertising
+$$
+
+Model ini sangat signifikan ($p<0.001$) dengan $R^2 = 0.9596$.
+
+## Deteksi Autokorelasi
+
+### Plot Sisaan
+
+```{r}
+plot(d2$Year, residuals(model2), type = "o", pch = 19, col = "blue",
+     xlab = "Tahun", ylab = "Sisaan", main = "Plot Sisaan vs Tahun (Data 2)")
+abline(h = 0, col = "red", lty = 2)
+```
+
+Pola sisaan pada Data 2 jauh lebih jelas: sisaan cenderung **positif secara berkepanjangan** di awal periode, lalu berbalik **negatif secara berkepanjangan**, membentuk pola gelombang halus khas autokorelasi positif yang sangat kuat.
+
+### Uji Durbin-Watson
+
+```{r}
+dwtest(model2)
+```
+
+Nilai $DW = 0.162$ jauh di bawah 2 dengan $p$*-value* $\approx 0 < 0.05$.
+**Kesimpulan: autokorelasi positif yang sangat kuat terdeteksi**, jauh lebih
+parah dibandingkan Data 1, sehingga wajib ditangani.
+
+## Penanganan Autokorelasi
+
+### Metode 1: Cochrane-Orcutt
+
+```{r}
+model2.co <- cochrane.orcutt(model2)
+model2.co
+```
+
+Diperoleh $\rho = 0.9031$ (sangat tinggi, sesuai indikasi autokorelasi kuat
+sebelumnya). Setelah transformasi, DW naik dari 0.162 menjadi **1.939**
+($p=0.378>0.05$) — autokorelasi berhasil **tertangani**. Model akhir:
+
+$$
+\hat{Sales} = 10.252 + 0.488\,Advertising
+$$
+
+### Metode 2: Hildreth-Lu
+
+```{r}
+rho2 <- seq(0.1, 0.99, 0.01)
+SSE2 <- sapply(rho2, function(r) sum(residuals(hildreth.lu(d2$Sales, d2$Advertising, r))^2))
+
+tab2 <- data.frame(rho2, SSE2)
+plot(tab2$rho2, tab2$SSE2, type = "l", xlab = expression(rho), ylab = "SSE",
+     main = "Pencarian rho optimum - Hildreth-Lu (Data 2)")
+rho2.opt <- tab2$rho2[which.min(tab2$SSE2)]
+abline(v = rho2.opt, col = "red", lty = 2)
+rho2.opt
+```
+
+```{r}
+model2.hl <- hildreth.lu(d2$Sales, d2$Advertising, rho2.opt)
+summary(model2.hl)
+
+intercept2.hl <- coef(model2.hl)[1] / (1 - rho2.opt)
+cat("Intersep model asli:", intercept2.hl, "\n")
+cat("Slope Advertising:", coef(model2.hl)[2], "\n")
+
+dwtest(model2.hl)
+```
+
+$\rho$ optimum Hildreth-Lu (**`r rho2.opt`**) sama persis dengan hasil
+Cochrane-Orcutt (dibulatkan 2 desimal). Setelah transformasi, DW menjadi
+**1.940** ($p=0.378>0.05$), autokorelasi tertangani, dengan model akhir:
+
+$$
+\hat{Sales} = `r round(intercept2.hl,3)` + `r round(coef(model2.hl)[2],3)`\,Advertising
+$$
+
+## Kesimpulan Data 2
+
+Data 2 menunjukkan autokorelasi yang **jauh lebih kuat** daripada Data 1
+($\rho\approx0.90$ dibanding $\rho\approx0.43$) — wajar karena *Sales* dan
+*Advertising* sama-sama memiliki tren naik yang sangat mulus sepanjang 40
+tahun. Kedua metode penanganan (Cochrane-Orcutt dan Hildreth-Lu) memberikan
+hasil yang konsisten dan sama-sama berhasil menghilangkan autokorelasi. Model
+akhir yang direkomendasikan:
+
+$$
+\hat{Sales} \approx 10.19 + 0.491\,Advertising
+$$

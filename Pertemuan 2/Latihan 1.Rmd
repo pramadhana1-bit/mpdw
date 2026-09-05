@@ -1,0 +1,166 @@
+---
+title: "Latihan 1"
+author: "Putra Ramadhana"
+output:
+  html_document:
+    theme: yeti
+    toc: true
+    toc_float: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+```
+
+## Packages
+
+```{r}
+library(lmtest)   # uji Durbin-Watson
+library(orcutt)   # metode Cochrane-Orcutt
+```
+
+1. **Plot sisaan** (sisaan vs urutan waktu / periode)
+2. **Uji Durbin-Watson**
+
+Jika ditemukan autokorelasi, dilakukan penanganan dengan dua metode:
+
+- **Metode Cochrane-Orcutt** — mengestimasi $\rho$ (koefisien autokorelasi orde
+  satu) secara iteratif menggunakan `orcutt::cochrane.orcutt()`, lalu
+  mentransformasi data dengan $\rho$ tersebut.
+- **Metode Hildreth-Lu** — mencari nilai $\rho$ optimum melalui pencarian
+  grid (*grid search*) yang meminimumkan Jumlah Kuadrat Sisaan (JKS/SSE) dari
+  model yang telah ditransformasi:
+
+$$
+Y_t-\rho Y_{t-1}=\beta_0(1-\rho)+\beta_1(X_t-\rho X_{t-1})+\varepsilon_t
+$$
+
+```{r}
+# Fungsi Hildreth-Lu (transformasi data dengan rho, lalu OLS)
+hildreth.lu <- function(y, x, rho){
+  t <- 2:length(y)
+  y <- y[t] - rho * y[t-1]
+  x <- x[t] - rho * x[t-1]
+  return(lm(y ~ x))
+}
+```
+
+---
+
+# Data 1: Market Share vs Price
+
+## Impor Data
+
+```{r}
+Period <- 1:20
+Market_Share <- c(3.63, 4.20, 3.33, 4.54, 2.89, 4.87, 4.90, 5.29, 6.18, 7.20,
+                   7.25, 6.09, 6.80, 8.65, 8.43, 8.29, 7.18, 7.90, 8.45, 8.23)
+Price <- c(0.97, 0.95, 0.99, 0.91, 0.98, 0.90, 0.89, 0.86, 0.85, 0.82,
+           0.79, 0.83, 0.81, 0.77, 0.76, 0.80, 0.83, 0.79, 0.76, 0.78)
+d1 <- data.frame(Period, Market_Share, Price)
+d1
+```
+
+## Regresi OLS (Cross Section)
+
+```{r}
+model1 <- lm(Market_Share ~ Price, data = d1)
+summary(model1)
+```
+
+Model awal yang terbentuk:
+
+$$
+\hat{Market Share} = 26.910 - 24.290\,Price
+$$
+
+Baik intersep maupun koefisien *Price* signifikan ($p<0.001$), dan model
+menjelaskan 95.1% keragaman *Market Share* ($R^2=0.9511$).
+
+## Deteksi Autokorelasi
+
+### Plot Sisaan
+
+```{r}
+plot(d1$Period, residuals(model1), type = "o", pch = 19, col = "blue",
+     xlab = "Periode", ylab = "Sisaan", main = "Plot Sisaan vs Periode (Data 1)")
+abline(h = 0, col = "red", lty = 2)
+```
+
+Plot sisaan menunjukkan pola yang tidak acak — sisaan cenderung bergerombol
+(beberapa periode berurutan bernilai positif, lalu beberapa periode berurutan
+bernilai negatif). Pola musiman/menggelombang ini mengindikasikan adanya
+**autokorelasi positif**.
+
+### Uji Durbin-Watson
+
+```{r}
+dwtest(model1)
+```
+
+Nilai $DW = 1.136$ dengan $p$*-value* $= 0.0098 < 0.05$, sehingga tolak $H_0$.
+**Kesimpulan: terdapat autokorelasi (positif) pada sisaan model**, sehingga
+perlu dilakukan penanganan.
+
+## Penanganan Autokorelasi
+
+### Metode 1: Cochrane-Orcutt
+
+```{r}
+model1.co <- cochrane.orcutt(model1)
+model1.co
+```
+
+Metode Cochrane-Orcutt mengestimasi $\rho = 0.4252$. Setelah transformasi,
+nilai DW naik dari 1.136 menjadi **1.958** dengan $p$*-value* $= 0.415 > 0.05$,
+artinya autokorelasi sudah **tertangani**. Model akhir:
+
+$$
+\hat{Market Share} = 26.722 - 24.084\,Price
+$$
+
+### Metode 2: Hildreth-Lu
+
+Dilakukan pencarian $\rho$ pada rentang 0.1 - 0.9 yang meminimumkan SSE.
+
+```{r}
+rho <- seq(0.1, 0.9, 0.01)
+SSE <- sapply(rho, function(r) sum(residuals(hildreth.lu(d1$Market_Share, d1$Price, r))^2))
+
+tab1 <- data.frame(rho, SSE)
+plot(tab1$rho, tab1$SSE, type = "l", xlab = expression(rho), ylab = "SSE",
+     main = "Pencarian rho optimum - Hildreth-Lu (Data 1)")
+rho1.opt <- tab1$rho[which.min(tab1$SSE)]
+abline(v = rho1.opt, col = "red", lty = 2)
+rho1.opt
+```
+
+$\rho$ optimum yang meminimumkan SSE adalah **`r rho1.opt`**, sangat dekat dengan hasil Cochrane-Orcutt (0.4252).
+
+```{r}
+model1.hl <- hildreth.lu(d1$Market_Share, d1$Price, rho1.opt)
+summary(model1.hl)
+
+# intersep asli (back-transform karena intersep hasil transformasi = intersep_asli*(1-rho))
+intercept1.hl <- coef(model1.hl)[1] / (1 - rho1.opt)
+cat("Intersep model asli:", intercept1.hl, "\n")
+cat("Slope Price:", coef(model1.hl)[2], "\n")
+
+dwtest(model1.hl)
+```
+
+Setelah transformasi Hildreth-Lu, DW naik menjadi **1.966** ($p=0.423>0.05$), autokorelasi juga sudah tertangani, dengan model akhir:
+
+$$
+\hat{Market Share} = `r round(intercept1.hl,3)` - 24.069\,Price
+$$
+
+## Kesimpulan Data 1
+
+Kedua metode (Cochrane-Orcutt dan Hildreth-Lu) memberikan estimasi $\rho$ yang hampir identik (0.4252 vs 0.43) serta koefisien model akhir yang sangat mirip, dan **keduanya berhasil menghilangkan autokorelasi** (DW mendekati 2 dan $p$*-value* $>0.05$ pada kedua kasus). Model akhir yang direkomendasikan:
+
+$$
+\hat{Market Share} \approx 26.7 - 24.1\,Price
+$$
+
+Interpretasinya: setiap kenaikan harga (*Price*) sebesar 1 satuan berkaitan dengan penurunan pangsa pasar sekitar 24.1 poin, setelah mengoreksi autokorelasi sisaan akibat sifat data deret waktu.
