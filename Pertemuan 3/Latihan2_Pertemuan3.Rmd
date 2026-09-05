@@ -1,0 +1,206 @@
+---
+title: "Latihan 2 - Pemodelan ARDL (Sales vs Advertising)"
+author: "Putra Ramadhana"
+output:
+  html_document:
+    theme: yeti
+    toc: true
+    toc_float: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+```
+
+## Packages
+
+```{r}
+library(dLagM)
+library(dynlm)
+library(MLmetrics)
+library(lmtest)
+library(car)
+```
+
+## Latar Belakang
+
+Soal meminta pemodelan **Autoregressive Distributed Lag (ARDL)** dari *Sales* (Y)
+terhadap *Advertising* (X) menggunakan data tahunan 1975-2014 (40 periode), lalu
+menentukan model terbaik. Pada model ARDL, $Y_t$ dipengaruhi oleh $X_t$, lag dari
+$X$, dan lag dari dirinya sendiri $Y_{t-1}$, dengan bentuk umum ARDL$(p,q)$:
+
+$$
+Y_t = \alpha + \sum_{i=0}^{p}\beta_iX_{t-i} + \sum_{j=1}^{q}\phi_jY_{t-j} + \varepsilon_t
+$$
+
+## Impor Data
+
+Data diinput persis sesuai tabel pada soal (40 tahun, 1975-2014).
+
+```{r}
+Year <- 1975:2014
+
+Sales <- c(11.7,12.0,12.3,12.8,13.1,13.6,13.9,14.4,14.7,15.3,
+           15.5,15.8,16.1,16.6,16.9,16.7,16.9,17.4,17.6,17.9,
+           18.0,17.9,18.0,18.2,18.2,18.3,18.6,19.2,19.3,19.5,
+           19.2,19.3,19.5,20.0,20.0,19.9,19.8,19.9,20.2,21.0)
+
+Advertising <- c(9.4,9.6,10.0,10.4,10.8,10.9,11.7,12.2,12.5,12.9,
+                  13.0,13.2,13.8,14.2,14.6,14.4,15.0,15.4,15.7,15.9,
+                  15.9,16.0,16.3,16.2,16.8,17.3,17.6,18.1,18.3,18.5,
+                  18.7,18.9,19.2,20.0,20.0,20.3,20.4,21.0,21.5,22.1)
+
+data <- data.frame(Year = Year, Sales = Sales, Advertising = Advertising)
+str(data)
+data
+```
+
+## Pembagian Data
+
+Data dibagi menjadi data latih (30 tahun pertama: 1975-2004) dan data uji (10
+tahun terakhir: 2005-2014)
+
+```{r}
+train <- data[1:30, ]
+test  <- data[31:40, ]
+
+train.ts <- ts(train)
+test.ts  <- ts(test)
+```
+
+## Penentuan Orde ARDL Optimum
+
+Pencarian orde $(p,q)$ dilakukan dengan `dLagM::ardlBoundOrders()`.
+
+```{r}
+order.search <- ardlBoundOrders(data = data.frame(train),
+                                 formula = Sales ~ Advertising,
+                                 ic = "AIC", max.p = 5, max.q = 5)
+order.search$Stat.table
+```
+
+Nilai AIC terkecil pada tabel di atas diperoleh pada $p=1$ dan $q=1$, sehingga
+ARDL$(1,1)$ menjadi kandidat orde yang paling efisien dan optimum berdasarkan AIC.
+
+## Pemodelan ARDL
+### ARDL(1,1) — kandidat terbaik
+
+```{r}
+model.ardl11 <- ardlDlm(formula = Sales ~ Advertising, data = train, p = 1, q = 1)
+summary(model.ardl11)
+AIC(model.ardl11); BIC(model.ardl11)
+```
+
+### Kandidat pembanding: ARDL(2,2), ARDL(3,1), ARDL(1,2)
+
+```{r}
+model.ardl22 <- ardlDlm(formula = Sales ~ Advertising, data = train, p = 2, q = 2)
+model.ardl31 <- ardlDlm(formula = Sales ~ Advertising, data = train, p = 3, q = 1)
+model.ardl12 <- ardlDlm(formula = Sales ~ Advertising, data = train, p = 1, q = 2)
+
+data.frame(
+  Model = c("ARDL(1,1)", "ARDL(2,2)", "ARDL(3,1)", "ARDL(1,2)"),
+  AIC = c(AIC(model.ardl11), AIC(model.ardl22), AIC(model.ardl31), AIC(model.ardl12)),
+  BIC = c(BIC(model.ardl11), BIC(model.ardl22), BIC(model.ardl31), BIC(model.ardl12))
+)
+```
+
+## Peramalan dan Akurasi Tiap Kandidat
+
+```{r}
+fore.ardl11 <- forecast(model = model.ardl11, x = test$Advertising, h = 10)
+fore.ardl22 <- forecast(model = model.ardl22, x = test$Advertising, h = 10)
+fore.ardl31 <- forecast(model = model.ardl31, x = test$Advertising, h = 10)
+fore.ardl12 <- forecast(model = model.ardl12, x = test$Advertising, h = 10)
+
+mape.ardl11 <- MAPE(fore.ardl11$forecasts, test$Sales)
+mape.ardl22 <- MAPE(fore.ardl22$forecasts, test$Sales)
+mape.ardl31 <- MAPE(fore.ardl31$forecasts, test$Sales)
+mape.ardl12 <- MAPE(fore.ardl12$forecasts, test$Sales)
+
+akurasi <- data.frame(
+  Model = c("ARDL(1,1)", "ARDL(2,2)", "ARDL(3,1)", "ARDL(1,2)"),
+  AIC   = c(AIC(model.ardl11), AIC(model.ardl22), AIC(model.ardl31), AIC(model.ardl12)),
+  BIC   = c(BIC(model.ardl11), BIC(model.ardl22), BIC(model.ardl31), BIC(model.ardl12)),
+  MAPE_test = c(mape.ardl11, mape.ardl22, mape.ardl31, mape.ardl12)
+)
+akurasi
+```
+
+```{r}
+GoF(model.ardl11)
+```
+
+ARDL(2,2) sedikit unggul pada MAPE data uji, tetapi menggunakan parameter lebih
+banyak dan memiliki AIC serta BIC yang lebih besar (lebih buruk) dibandingkan
+ARDL(1,1). Karena selisih MAPE keduanya sangat kecil, **ARDL(1,1)** dipilih
+sebagai **model terbaik** karena lebih sederhana, memiliki AIC dan
+BIC terkecil, dan akurasi peramalannya tetap sangat baik.
+
+## Model Terbaik: ARDL(1,1)
+
+Model ARDL(1,1) yang terpilih adalah:
+
+$$
+\hat{Sales}_t = 1.5579 + 0.2911\,Advertising_t - 0.0958\,Advertising_{t-1} + 0.7436\,Sales_{t-1}
+$$
+
+Nilai $p$*-value* menunjukkan bahwa $Advertising_t$ ($p=0.044$) dan $Sales_{t-1}$
+($p<0.001$) berpengaruh signifikan terhadap $Sales_t$ pada taraf nyata 5%,
+sedangkan $Advertising_{t-1}$ tidak signifikan ($p=0.556$). Model ini memiliki
+$R^2_{adj} = 0.9949$, artinya hampir seluruh keragaman *Sales* mampu dijelaskan
+oleh model.
+
+### Uji Diagnostik Model Terbaik
+
+```{r}
+cons_ardl <- dynlm(Sales ~ Advertising + L(Advertising) + L(Sales), data = train.ts)
+
+cat("Uji Autokorelasi (Durbin-Watson):\n")
+dwtest(cons_ardl)
+
+cat("Uji Heteroskedastisitas (Breusch-Pagan):\n")
+bptest(cons_ardl)
+
+cat("Uji Normalitas Residual (Shapiro-Wilk):\n")
+shapiro.test(residuals(cons_ardl))
+```
+
+- Uji Durbin-Watson: $p$*-value* = 0.351 (> 0.05) → **tidak ada autokorelasi**.
+- Uji Breusch-Pagan: $p$*-value* = 0.882 (> 0.05) → **tidak ada heteroskedastisitas**
+- Uji Shapiro-Wilk: $p$*-value* = 0.247 (> 0.05) → **residual berdistribusi normal**.
+
+Ketiga asumsi (non-autokorelasi, homoskedastisitas, dan normalitas residual)
+terpenuhi, sehingga model ARDL(1,1) layak digunakan.
+
+### Peramalan 10 Tahun ke Depan (Data Uji)
+
+```{r}
+fore.ardl11
+mape.ardl11
+```
+
+```{r}
+plot(test$Year, test$Sales, type = "b", col = "black", pch = 19,
+     xlab = "Tahun", ylab = "Sales", main = "Aktual vs Ramalan ARDL(1,1)",
+     ylim = range(c(test$Sales, fore.ardl11$forecasts)))
+lines(test$Year, fore.ardl11$forecasts, col = "red", type = "b", pch = 17)
+legend("topleft", c("Aktual", "Ramalan ARDL(1,1)"), col = c("black", "red"),
+       lty = 1, pch = c(19, 17))
+```
+
+## Kesimpulan
+
+Model **ARDL(1,1)** merupakan model *distributed lag* terbaik untuk menjelaskan
+hubungan *Sales* terhadap *Advertising* pada data ini, karena:
+
+1. Memiliki AIC dan BIC terkecil di antara kandidat orde yang diuji
+2. Akurasi peramalan pada data uji sangat baik, dengan **MAPE ≈ 4.85%**
+   (di bawah 10%, dikategorikan peramalan sangat akurat).
+3. Lolos ketiga uji asumsi residual (non-autokorelasi, homoskedastisitas, dan
+   normalitas).
+4. Baik pengeluaran iklan periode berjalan ($Advertising_t$) maupun *Sales*
+   periode sebelumnya ($Sales_{t-1}$) terbukti berpengaruh signifikan terhadap
+   *Sales* saat ini, sejalan dengan intuisi bisnis bahwa efek iklan tidak
+   sepenuhnya instan dan penjualan memiliki kelembaman (*persistence*) dari
+   waktu ke waktu.
