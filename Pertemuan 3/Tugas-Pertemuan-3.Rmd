@@ -1,0 +1,347 @@
+---
+title: "Tugas Pertemuan 3 - Regresi dengan Peubah Lag"
+subtitle: "Kualitas Udara New Delhi (AQI vs O3)"
+author: "Putra Ramadhana"
+output:
+  html_document:
+    theme: yeti
+    toc: true
+    toc_float: true
+  word_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+```
+
+## Packages
+
+```{r}
+library(dLagM)
+library(dynlm)
+library(MLmetrics)
+library(lmtest)
+library(car)
+```
+
+## Pendahuluan
+
+Tugas ini menerapkan **regresi dengan peubah lag** (Koyck, *Distributed Lag Model*, dan *Autoregressive Distributed Lag*) pada data kualitas udara per jam Kota New Delhi. Variabel dependen (Y) adalah **AQI (Air Quality Index)**, sedangkan variabel independen (X) dipilih dari salah satu polutan yang tersedia (CO, NO2, O3, PM10, PM2.5, SO2).
+
+Sebelum memilih X, dilakukan pengecekan korelasi setiap polutan terhadap AQI agar peubah yang dipakai memang relevan secara statistik.
+
+```{r}
+polusi <- read.csv("C:\\Users\\Roshan\\OneDrive\\Documents\\Kuliah\\MPDW\\Praktikum 3\\NewDelhi_Air_quality (1).csv")
+str(polusi)
+
+cor(polusi[, c("AQI","CO","no2","o3","pm10","pm25","so2")])["AQI", ]
+```
+
+Dari matriks korelasi di atas, **O3 (ozon)** memiliki korelasi paling kuat dengan AQI (r ≈ 0.97), jauh lebih tinggi dibanding polutan lain seperti CO (0.80) atau NO2 (0.74). Oleh karena itu, **O3 dipilih sebagai peubah independen (X)** dan **AQI sebagai peubah dependen (Y)**.
+
+## Impor dan Persiapan Data
+
+```{r}
+Period <- 1:nrow(polusi)
+AQI <- polusi$AQI
+O3  <- polusi$o3
+
+data <- data.frame(Period = Period, AQI = AQI, O3 = O3)
+str(data)
+head(data)
+```
+
+Data terdiri atas 72 observasi (pengukuran per jam). Data dibagi menjadi data latih (*train*) sebanyak 60 observasi pertama dan data uji (*test*) sebanyak 12 observasi terakhir, sehingga peramalan dilakukan untuk **h = 12** periode ke depan.
+
+```{r}
+#SPLIT DATA
+train <- data[1:60, ]
+test  <- data[61:72, ]
+```
+
+```{r}
+#data time series
+train.ts <- ts(train)
+test.ts  <- ts(test)
+data.ts  <- ts(data)
+```
+
+## Model Koyck
+
+Model Koyck mengasumsikan pengaruh lag dari peubah independen semakin mengecil seiring bertambahnya jarak lag, dan direpresentasikan melalui lag dari peubah dependen itu sendiri ($Y_{t-1}$).
+
+```{r}
+#MODEL KOYCK
+model.koyck <- koyckDlm(x = train$O3, y = train$AQI)
+summary(model.koyck)
+AIC(model.koyck)
+BIC(model.koyck)
+```
+
+Hasil di atas menunjukkan bahwa baik $x_t$ (O3 saat ini) maupun $y_{t-1}$ (AQI periode sebelumnya) memiliki nilai p-value < 0.05, artinya keduanya berpengaruh signifikan terhadap AQI. Model yang terbentuk:
+
+$$
+\hat{Y_t}=-0.1360+0.2584X_t+0.4433Y_{t-1}
+$$
+
+### Peramalan dan Akurasi
+
+```{r}
+fore.koyck <- forecast(model = model.koyck, x = test$O3, h = 12)
+fore.koyck
+mape.koyck <- MAPE(fore.koyck$forecasts, test$AQI)
+mape.koyck
+GoF(model.koyck)
+```
+
+## Regression with Distributed Lag (DLM)
+
+### Pemodelan (Lag = 2)
+
+```{r}
+model.dlm <- dlm(x = train$O3, y = train$AQI, q = 2)
+summary(model.dlm)
+AIC(model.dlm)
+BIC(model.dlm)
+```
+
+Pada lag = 2, hanya $x_t$ (O3 saat ini) yang signifikan secara statistik ($P<0.05$), sedangkan $x_{t-1}$ dan $x_{t-2}$ tidak signifikan. Model yang terbentuk:
+
+$$
+\hat{Y_t}=-0.0850+0.4846X_t-0.0158X_{t-1}-0.0061X_{t-2}
+$$
+
+### Peramalan dan Akurasi
+
+```{r}
+fore.dlm <- forecast(model = model.dlm, x = test$O3, h = 12)
+fore.dlm
+mape.dlm <- MAPE(fore.dlm$forecasts, test$AQI)
+mape.dlm
+#akurasi data training
+GoF(model.dlm)
+```
+
+### Lag Optimum
+
+```{r}
+#penentuan lag optimum
+finiteDLMauto(formula = AQI ~ O3,
+              data = data.frame(train), q.min = 1, q.max = 10,
+              model.type = "dlm", error.type = "AIC", trace = TRUE)
+```
+
+Berdasarkan output tersebut, lag optimum (AIC terkecil pada rentang yang diuji) didapatkan pada **lag = 10**. Selanjutnya dilakukan pemodelan dengan lag tersebut.
+
+```{r}
+#model dlm dengan lag optimum
+model.dlm2 <- dlm(x = train$O3, y = train$AQI, q = 10)
+summary(model.dlm2)
+AIC(model.dlm2)
+BIC(model.dlm2)
+```
+
+Dengan lag = 10, beberapa peubah lag (di antaranya $x_{t}$, $x_{t-7}$, $x_{t-8}$, $x_{t-9}$) signifikan pada taraf nyata 5%. Model ini memiliki $R^2$ yang lebih tinggi (0.99) dibanding model lag = 2, namun dengan jumlah parameter yang jauh lebih banyak (risiko *overfitting* pada data latih).
+
+### Peramalan dan Akurasi
+
+```{r}
+#peramalan dan akurasi
+fore.dlm2 <- forecast(model = model.dlm2, x = test$O3, h = 12)
+
+#akurasi data test
+mape.dlm2 <- MAPE(fore.dlm2$forecasts, test$AQI)
+mape.dlm2
+
+#akurasi data training
+GoF(model.dlm2)
+```
+
+## Model Autoregressive (ARDL)
+
+### Pemodelan
+
+```{r}
+model.ardl <- ardlDlm(formula = AQI ~ O3, data = train, p = 1, q = 1)
+summary(model.ardl)
+AIC(model.ardl)
+BIC(model.ardl)
+```
+
+Hasil uji-t menunjukkan bahwa peubah $x_t$ (O3 saat ini), $x_{t-1}$ (O3 lag 1), dan $y_{t-1}$ (AQI lag 1) semuanya berpengaruh signifikan terhadap AQI ($P<0.05$). Model keseluruhan:
+
+$$
+\hat{Y_t}=-0.0691+0.4798X_t-0.2251X_{t-1}+0.4502Y_{t-1}
+$$
+
+### Peramalan dan Akurasi
+
+```{r}
+fore.ardl <- forecast(model = model.ardl, x = test$O3, h = 12)
+fore.ardl
+```
+
+```{r}
+mape.ardl <- MAPE(fore.ardl$forecasts, test$AQI)
+mape.ardl
+#akurasi data training
+GoF(model.ardl)
+```
+
+### Lag dan Ordo Optimum
+
+```{r}
+#penentuan lag dan ordo optimum
+model.ardl.opt <- ardlBoundOrders(data = data.frame(train), ic = "AIC",
+                                   formula = AQI ~ O3)
+model.ardl.opt
+min_p <- c()
+for (i in 1:6) {
+  min_p[i] <- min(model.ardl.opt$Stat.table[[i]])
+}
+q_opt <- which(min_p == min(min_p, na.rm = TRUE))
+p_opt <- which(model.ardl.opt$Stat.table[[q_opt]] ==
+               min(model.ardl.opt$Stat.table[[q_opt]], na.rm = TRUE))
+data.frame("q_optimum" = q_opt, "p_optimum" = p_opt,
+           "AIC" = model.ardl.opt$min.Stat)
+```
+
+Kombinasi ordo $p$ dan $q$ optimum di atas dapat dijadikan acuan pemodelan ARDL lanjutan, namun pada tugas ini pembandingan akhir tetap difokuskan pada model ARDL(1,1) di atas agar sebanding dengan model Koyck dan DLM yang parsimoni.
+
+## Pemodelan dengan Library `dynlm`
+
+Sebagai pembanding, model-model di atas juga direpresentasikan dengan `dynlm` beserta fungsi `L()` untuk mengambil nilai lag.
+
+```{r}
+#sama dengan model dlm q=1
+cons_lm1 <- dynlm(AQI ~ O3 + L(O3), data = train.ts)
+
+#sama dengan model ardl p=1 q=0
+cons_lm2 <- dynlm(AQI ~ O3 + L(AQI), data = train.ts)
+
+#sama dengan ardl p=1 q=1
+cons_lm3 <- dynlm(AQI ~ O3 + L(O3) + L(AQI), data = train.ts)
+
+#sama dengan dlm q=2
+cons_lm4 <- dynlm(AQI ~ O3 + L(O3) + L(O3, 2), data = train.ts)
+```
+
+### Ringkasan Model
+
+```{r}
+summary(cons_lm1)
+summary(cons_lm2)
+summary(cons_lm3)
+summary(cons_lm4)
+```
+
+### SSE
+
+```{r}
+deviance(cons_lm1)
+deviance(cons_lm2)
+deviance(cons_lm3)
+deviance(cons_lm4)
+```
+
+Model 3 (kombinasi O3, lag O3, dan lag AQI — setara ARDL(1,1)) memiliki SSE terkecil di antara keempatnya, menandakan model ini paling baik menyesuaikan data latih dibanding model 1, 2, dan 4.
+
+### Uji Encompassing
+
+```{r}
+#uji model
+if (require("lmtest")) encomptest(cons_lm1, cons_lm2)
+```
+
+- **Model 1** (hanya lag X): melawan model gabungan, penambahan lag Y memberikan peningkatan yang **signifikan** (p-value ≪ 0.05). Artinya Model 1 saja belum memadai.
+- **Model 2** (hanya lag Y): melawan model gabungan, penambahan lag X juga memberikan peningkatan yang **signifikan** (p-value ≪ 0.05). Artinya Model 2 saja belum memadai.
+
+Kesimpulannya, kedua peubah (lag X dan lag Y) sama-sama dibutuhkan — konsisten dengan struktur model ARDL.
+
+#### Uji Autokorelasi Residual
+
+```{r}
+#durbin watson
+dwtest(cons_lm1)
+dwtest(cons_lm2)
+dwtest(cons_lm3)
+dwtest(cons_lm4)
+```
+
+Model 1 dan Model 2 menunjukkan indikasi autokorelasi positif (p-value < 0.05), sedangkan Model 3 dan Model 4 tidak menunjukkan autokorelasi residual yang signifikan (p-value > 0.05).
+
+#### Uji Heteroskedastisitas
+
+```{r}
+bptest(cons_lm1)
+bptest(cons_lm2)
+bptest(cons_lm3)
+bptest(cons_lm4)
+```
+
+- Jika p-value > 0.05 → tidak ada heteroskedastisitas.
+- Jika p-value ≤ 0.05 → ada heteroskedastisitas.
+
+Model 2 dan Model 3 terindikasi mengalami heteroskedastisitas (p-value < 0.05), sedangkan Model 1 dan Model 4 tidak.
+
+#### Uji Normalitas
+
+H0: Residual berdistribusi normal.
+H1: Residual tidak berdistribusi normal.
+
+```{r}
+shapiro.test(residuals(cons_lm1))
+shapiro.test(residuals(cons_lm2))
+shapiro.test(residuals(cons_lm3))
+shapiro.test(residuals(cons_lm4))
+```
+
+- Jika p-value > 0.05 → gagal tolak H0 → residual normal.
+- Jika p-value ≤ 0.05 → tolak H0 → residual tidak normal.
+
+Hanya Model 3 (setara ARDL(1,1)) yang residualnya berdistribusi normal (p-value > 0.05); model lainnya menyimpang dari asumsi normalitas.
+
+## Perbandingan Model
+
+```{r}
+akurasi <- matrix(c(mape.koyck, mape.dlm, mape.dlm2, mape.ardl))
+row.names(akurasi) <- c("Koyck", "DLM (lag=2)", "DLM (lag optimum=10)", "Autoregressive (ARDL 1,1)")
+colnames(akurasi) <- c("MAPE")
+akurasi
+```
+
+Berdasarkan nilai MAPE pada data uji, **model DLM dengan lag = 2 memberikan hasil paling akurat** (MAPE terkecil), diikuti oleh model ARDL(1,1), kemudian DLM dengan lag optimum (=10), dan terakhir model Koyck dengan MAPE terbesar. Model dengan lag "optimum" hasil `finiteDLMauto` justru memberikan akurasi peramalan pada data uji yang lebih buruk dibanding model DLM lag=2 yang lebih sederhana, ini adalah indikasi *overfitting*: model dengan lebih banyak parameter cocok sangat baik pada data latih, tetapi kurang mampu menggeneralisasi ke data baru. Hal ini menegaskan pentingnya validasi pada data uji, bukan hanya mengandalkan kriteria AIC/BIC pada data latih semata.
+
+### Plot Perbandingan
+
+```{r}
+par(mfrow = c(1, 1))
+
+# plot data aktual
+plot(test$O3, test$AQI, type = "b", col = "black",
+     ylim = range(c(test$AQI, fore.koyck$forecasts, fore.dlm$forecasts,
+                    fore.dlm2$forecasts, fore.ardl$forecasts)),
+     xlab = "O3", ylab = "AQI")
+
+# tambahkan garis ramalan dari masing-masing model
+points(test$O3, fore.koyck$forecasts, col = "red");    lines(test$O3, fore.koyck$forecasts, col = "red")
+points(test$O3, fore.dlm$forecasts, col = "blue");     lines(test$O3, fore.dlm$forecasts, col = "blue")
+points(test$O3, fore.dlm2$forecasts, col = "orange");  lines(test$O3, fore.dlm2$forecasts, col = "orange")
+points(test$O3, fore.ardl$forecasts, col = "green");   lines(test$O3, fore.ardl$forecasts, col = "green")
+
+# legenda model
+legend("topleft",
+       c("Aktual", "Koyck", "DLM (lag=2)", "DLM (lag optimum)", "Autoregressive"),
+       lty = 1, col = c("black", "red", "blue", "orange", "green"), cex = 0.8)
+```
+
+Dari plot di atas, garis ramalan model **DLM (lag=2)** dan **Autoregressive (ARDL)** paling mendekati garis data aktual pada seluruh periode uji, sejalan dengan nilai MAPE keduanya yang terkecil. Model DLM dengan lag optimum (oranye) tampak lebih menyimpang di beberapa titik akibat kompleksitas model yang berlebih (overfitting), sementara model Koyck (merah) menunjukkan penyimpangan paling besar di antara keempat model.
+
+## Kesimpulan
+
+1. Variabel **O3** dipilih sebagai peubah independen karena memiliki korelasi paling kuat terhadap AQI (r ≈ 0.97) dibanding polutan lain pada dataset.
+2. Keempat model (Koyck, DLM lag=2, DLM lag optimum, dan ARDL(1,1)) sama-sama mampu menangkap pola hubungan AQI dan O3 dengan sangat baik ($R^2 > 0.95$ pada seluruh model).
+3. Berdasarkan metrik akurasi **MAPE pada data uji**, **model DLM dengan lag = 2 merupakan model terbaik** karena memberikan nilai MAPE terkecil, diikuti oleh model ARDL(1,1).
+4. Model dengan lag yang dipilih berdasarkan AIC minimum pada data latih (lag = 10) tidak selalu menghasilkan akurasi peramalan terbaik pada data baru — hal ini menegaskan pentingnya mengevaluasi model pada data uji (out-of-sample), bukan hanya kriteria informasi pada data latih.
+5. Uji diagnostik residual (Durbin-Watson, Breusch-Pagan, dan Shapiro-Wilk) menunjukkan bahwa model yang menggabungkan lag X dan lag Y (setara ARDL) memiliki residual yang paling mendekati asumsi klasik (tidak ada autokorelasi dan berdistribusi normal) dibandingkan model yang hanya menggunakan satu jenis lag.
