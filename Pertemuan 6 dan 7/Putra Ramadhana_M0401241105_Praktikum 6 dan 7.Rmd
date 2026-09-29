@@ -1,0 +1,95 @@
+---
+title: "Tugas Praktikum Pertemuan 6 dan 7"
+author: "Putra Ramadhana M0401241105"
+date: "`r Sys.Date()`"
+output:
+  rmdformats::readthedown:
+    highlight: kate
+---
+
+# 1. Library dan Data
+
+```{r}
+library(forecast)
+library(tseries)
+
+data <- read.csv2("C:\\Users\\Roshan\\OneDrive\\Documents\\Kuliah\\MPDW\\MPDW Cabai merah (100 Periode).csv")
+data$Tanggal <- as.Date(data$Tanggal, format = "%d/%m/%Y")
+head(data)
+
+# Ubah ke time series (indeks periode 1-100)
+y <- ts(data$Harga)
+plot(y, main = "Harga Cabai Merah", ylab = "Harga", xlab = "Periode")
+```
+
+# 2. Data Latih dan Data Uji (80:20)
+
+```{r}
+train <- ts(y[1:80], start = 1)
+test  <- ts(y[81:100], start = 81)
+```
+
+# 3. Uji Kestasioneran
+
+```{r}
+# H0 ADF: data tidak stasioner (stasioner jika p-value < 0.05)
+adf.test(train)
+
+par(mfrow = c(1, 2))
+acf(train, main = "ACF")
+pacf(train, main = "PACF")
+```
+
+Data belum stasioner, sehingga dilakukan differencing orde 1.
+
+```{r}
+d1 <- diff(train)
+plot(d1, main = "Data Setelah Differencing", ylab = "Selisih Harga")
+
+par(mfrow = c(1, 2))
+acf(d1, main = "ACF Differencing")
+pacf(d1, main = "PACF Differencing")
+```
+
+# 4. Pemodelan ARIMA
+
+`auto.arima` mencari model terbaik (AIC terkecil) secara otomatis.
+
+```{r}
+model <- auto.arima(train, seasonal = FALSE)
+summary(model)
+```
+
+# 5. Diagnostik Sisaan
+
+```{r}
+# Ljung-Box: p-value > 0.05 berarti sisaan tidak berautokorelasi (baik)
+checkresiduals(model)
+
+# Shapiro-Wilk: p-value > 0.05 berarti sisaan normal
+shapiro.test(residuals(model))
+```
+
+# 6. Evaluasi pada Data Uji
+
+```{r}
+ramalan_uji <- forecast(model, h = length(test))
+accuracy(ramalan_uji, test)
+
+plot(ramalan_uji, main = "Ramalan vs Data Aktual")
+lines(test, col = "red")
+```
+
+
+
+# 7. Peramalan 10 Periode ke Depan
+
+Model diduga ulang dengan seluruh data, lalu dipakai untuk meramal.
+
+```{r}
+model_akhir <- Arima(y, order = arimaorder(model)[1:3])
+ramalan <- forecast(model_akhir, h = 10)
+ramalan
+
+plot(ramalan, main = "Ramalan 10 Periode ke Depan")
+```
